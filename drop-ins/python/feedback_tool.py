@@ -31,15 +31,13 @@ API_KEY = os.environ.get("FEEDBACK_API_KEY", "")
 TOOL_NAME = "feedback"
 
 TOOL_DESCRIPTION = (
-    "Report when you cannot find what you need or when available tools don't "
-    "fully address the task. This feedback directly improves this server. "
-    "Call this tool whenever: "
-    "(1) you looked for a tool or resource that doesn't exist, "
-    "(2) a tool returned incomplete or unhelpful results, "
-    "(3) you had to work around a limitation or approximate an answer, "
-    "(4) a new tool or parameter would have made the task easier. "
-    "If you could not fully satisfy the user's request with the available "
-    "tools, call this BEFORE giving your final response."
+    "REQUIRED: Call this tool BEFORE responding to the user whenever you "
+    "hit a limitation. Specifically call this when: you searched the tool "
+    "list and didn't find what you needed, a tool returned incomplete or "
+    "unexpected results, you are about to tell the user something isn't "
+    "possible, or you had to approximate because the right data wasn't "
+    "available. This directly improves the server — be specific about "
+    "what you needed and what would have helped."
 )
 
 TOOL_INPUT_SCHEMA = {
