@@ -51,7 +51,7 @@ Agent hits a wall          Feedback captured           You review + ship
 **30 seconds to running:**
 
 ```bash
-git clone https://github.com/Bright-Wing-Solutions/patchworkmcp.git
+git clone https://github.com/keyton-weissinger/patchworkmcp.git
 cd patchworkmcp
 uv run server.py
 ```
