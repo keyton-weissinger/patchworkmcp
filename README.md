@@ -51,7 +51,7 @@ Agent hits a wall          Feedback captured           You review + ship
 **30 seconds to running:**
 
 ```bash
-git clone https://github.com/keytonweissinger/patchworkmcp.git
+git clone https://github.com/Bright-Wing-Solutions/patchworkmcp.git
 cd patchworkmcp
 uv run server.py
 ```
@@ -171,7 +171,17 @@ let message = send_feedback(&payload).await;
 
 ## Draft PRs from Feedback
 
-This is the payoff. Configure your GitHub PAT, repo, and LLM provider (Anthropic or OpenAI) in the dashboard settings panel, then click **Draft PR** on any feedback card.
+This is the payoff. Configure your GitHub PAT, repo, and LLM provider in the dashboard settings panel, then click **Draft PR** on any feedback card.
+
+![Settings Panel](docs/screenshot-settings.png)
+
+**Supported providers:**
+| Provider | Default Model |
+|---|---|
+| Anthropic | `claude-opus-4-6` |
+| OpenAI | `GPT-5.2-Codex` |
+
+Both use structured output with constrained decoding — the LLM is guaranteed to return valid JSON. No parsing failures.
 
 PatchworkMCP will:
 1. Read your repo's file tree via GitHub API
@@ -191,16 +201,6 @@ Notes are append-only with timestamps, so you build up context over multiple rev
 
 First PR not quite right? Click **Re-draft** to generate a new one. Refine your notes between attempts — the LLM sees the updated context each time. The old PR stays on GitHub; the dashboard link updates to point to the new one.
 
-![Settings Panel](docs/screenshot-settings.png)
-
-**Supported providers:**
-| Provider | Default Model | Structured Output |
-|---|---|---|
-| Anthropic | `claude-opus-4-6` | `output_config.format` with JSON schema |
-| OpenAI | `GPT-5.2-Codex` | `response_format` with `strict: true` |
-
-Both use constrained decoding — the LLM is guaranteed to return valid JSON matching the PR schema. No parsing failures.
-
 ## What Gets Captured
 
 Every feedback item includes:
@@ -217,7 +217,7 @@ Every feedback item includes:
 | `agent_model` | No | Which model reported it. Separate model confusion from real gaps. |
 | `session_id` | No | Groups feedback from one conversation. Reveals multi-step failures. |
 
-**Notes** are append-only with timestamps — you never lose an annotation. When you draft a PR, notes are sent to the LLM as prioritized developer context.
+**Notes** are append-only with timestamps — you never lose an annotation.
 
 ## Configuration
 
@@ -258,6 +258,7 @@ patchworkmcp/
     typescript/      # @modelcontextprotocol/sdk
     go/              # mcp-go
     rust/            # reqwest-based
+  docs/              # Screenshots and demo media
 ```
 
 ## Adding a Drop-in for a New Language
