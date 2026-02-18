@@ -23,7 +23,9 @@ That's not a vague complaint. That's a tool spec. PatchworkMCP can take that fee
 
 ## Where It Fits Today
 
-PatchworkMCP is built for **early-stage MCP server development** — when you're actively building tools and need fast signal about what's missing. Wire it up, let agents use your server, and see exactly where they hit walls. The draft PR feature means you can go from gap report to working code in under a minute.
+The MCP ecosystem has a "[more builders than users](https://newsletter.pragmaticengineer.com/p/mcp-deepdive)" problem — Gergely Orosz and team lay it out well in their deep dive. Developers ship MCP servers and don't know what agents actually need from them. The best practice is to design for agents, not humans, but agents can't tell you what's missing unless you give them a way to.
+
+That's what PatchworkMCP does. It's built for **active MCP server development** — both public servers and the internal ones that [make up the majority of real MCP adoption](https://newsletter.pragmaticengineer.com/p/mcp-deepdive). Whether you're building tools for Claude Desktop users or wrapping an internal data warehouse for your team, the feedback loop is the same: wire it up, let agents use your server, see exactly where they hit walls, and draft fixes in under a minute.
 
 This is the MVP. The bigger picture is below in [Where This Is Going](#where-this-is-going).
 
@@ -218,6 +220,7 @@ Every feedback item includes:
 | `tools_available` | No | What tools the agent could see. Context for the gap. |
 | `agent_model` | No | Which model reported it. Separate model confusion from real gaps. |
 | `session_id` | No | Groups feedback from one conversation. Reveals multi-step failures. |
+| `client_type` | No | Which MCP client reported it (`claude-desktop`, `cursor`, `claude-code`). |
 
 **Notes** are append-only with timestamps — you never lose an annotation.
 
@@ -231,6 +234,14 @@ Every feedback item includes:
 | `FEEDBACK_PORT` | `8099` | Port for `uv run server.py` |
 
 Draft PR settings (GitHub PAT, API keys) are stored in a `.env` file that's gitignored — not in the database.
+
+## Security
+
+The sidecar is designed for **local development** — `localhost:8099` with no auth by default. For shared or remote deployments:
+
+- Set `FEEDBACK_API_KEY` to a shared secret. Drop-ins and the sidecar both read it — requests without a valid `Authorization: Bearer <key>` header are rejected.
+- Put the sidecar behind HTTPS (nginx, Caddy, etc.) if it's not on localhost.
+- GitHub PATs and LLM API keys are stored in `.env`, never in SQLite or API responses. The settings endpoint masks keys to their last 4 characters.
 
 ## API
 
