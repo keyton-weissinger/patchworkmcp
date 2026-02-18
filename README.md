@@ -171,25 +171,27 @@ let message = send_feedback(&payload).await;
 
 ## Draft PRs from Feedback
 
-This is the payoff. Configure your GitHub PAT, repo, and LLM provider in the dashboard settings panel, then click **Draft PR** on any feedback card.
+This is the payoff. Click **Draft PR** on any feedback card and PatchworkMCP will:
 
-![Settings Panel](docs/screenshot-settings.png)
-
-**Supported providers:**
-| Provider | Default Model |
-|---|---|
-| Anthropic | `claude-opus-4-6` |
-| OpenAI | `GPT-5.2-Codex` |
-
-Both use structured output with constrained decoding — the LLM is guaranteed to return valid JSON. No parsing failures.
-
-PatchworkMCP will:
 1. Read your repo's file tree via GitHub API
 2. Score files by MCP relevance and select the most important ones
 3. Send the feedback + **your notes** + code context to the LLM with structured output enforcement
 4. Create a branch, commit the change, and open a draft PR
 
 You get a real-time progress modal showing each step. The PR links back to the original feedback.
+
+### Setup
+
+Configure your GitHub PAT, repo, and LLM provider in the dashboard settings panel:
+
+![Settings Panel](docs/screenshot-settings.png)
+
+| Provider | Default Model |
+|---|---|
+| Anthropic | `claude-opus-4-6` |
+| OpenAI | `GPT-5.2-Codex` |
+
+Both use structured output with constrained decoding — the LLM returns valid JSON every time.
 
 ### Notes guide the LLM
 
