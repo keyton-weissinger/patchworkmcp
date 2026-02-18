@@ -107,16 +107,24 @@ export const TOOL_INPUT_SCHEMA = {
  *   const server = new McpServer({ name: "my-server", version: "1.0.0" });
  *   registerFeedbackTool(server, "my-server");
  */
+export interface FeedbackToolOptions {
+  /** Override FEEDBACK_SIDECAR_URL for this tool instance. */
+  sidecarUrl?: string;
+  /** Override FEEDBACK_API_KEY for this tool instance. */
+  apiKey?: string;
+}
+
 export function registerFeedbackTool(
   server: { tool: Function },
   serverName: string = "unknown",
+  options: FeedbackToolOptions = {},
 ): void {
   server.tool(
     TOOL_NAME,
     TOOL_DESCRIPTION,
     TOOL_INPUT_SCHEMA,
     async (args: Record<string, unknown>) => {
-      const message = await sendFeedback(args, serverName);
+      const message = await sendFeedback(args, serverName, options);
       return { content: [{ type: "text", text: message }] };
     },
   );
@@ -127,7 +135,11 @@ export function registerFeedbackTool(
 export async function sendFeedback(
   args: Record<string, unknown>,
   serverName: string = "unknown",
+  options: FeedbackToolOptions = {},
 ): Promise<string> {
+  const url = options.sidecarUrl ?? SIDECAR_URL;
+  const key = options.apiKey ?? API_KEY;
+
   const payload = {
     server_name: serverName,
     what_i_needed: (args.what_i_needed as string) ?? "",
@@ -144,12 +156,12 @@ export async function sendFeedback(
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
   };
-  if (API_KEY) {
-    headers["Authorization"] = `Bearer ${API_KEY}`;
+  if (key) {
+    headers["Authorization"] = `Bearer ${key}`;
   }
 
   try {
-    const resp = await fetch(`${SIDECAR_URL}/api/feedback`, {
+    const resp = await fetch(`${url}/api/feedback`, {
       method: "POST",
       headers,
       body: JSON.stringify(payload),

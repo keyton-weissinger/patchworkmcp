@@ -115,9 +115,33 @@ func getString(args map[string]any, key string) string {
 	return ""
 }
 
+// Options configures the feedback tool's sidecar connection.
+// Pass to RegisterFeedbackTool or SendFeedback to override env vars.
+type Options struct {
+	// SidecarURL overrides FEEDBACK_SIDECAR_URL.
+	SidecarURL string
+	// APIKey overrides FEEDBACK_API_KEY.
+	APIKey string
+}
+
+func (o *Options) url() string {
+	if o != nil && o.SidecarURL != "" {
+		return o.SidecarURL
+	}
+	return sidecarURL
+}
+
+func (o *Options) key() string {
+	if o != nil && o.APIKey != "" {
+		return o.APIKey
+	}
+	return apiKey
+}
+
 // SendFeedback posts feedback to the sidecar. Best-effort, non-blocking on
 // failure. Returns a message suitable as the tool response.
-func SendFeedback(ctx context.Context, args map[string]any, serverName string) string {
+// Pass nil for opts to use environment variable defaults.
+func SendFeedback(ctx context.Context, args map[string]any, serverName string, opts *Options) string {
 	// Parse tools_available — accept comma-separated string or []any
 	var tools []string
 	switch v := args["tools_available"].(type) {
@@ -157,13 +181,13 @@ func SendFeedback(ctx context.Context, args map[string]any, serverName string) s
 	}
 
 	client := &http.Client{Timeout: 5 * time.Second}
-	req, err := http.NewRequestWithContext(ctx, "POST", sidecarURL+"/api/feedback", bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, "POST", opts.url()+"/api/feedback", bytes.NewReader(body))
 	if err != nil {
 		return "Feedback noted (sidecar unavailable, but your input is appreciated)."
 	}
 	req.Header.Set("Content-Type", "application/json")
-	if apiKey != "" {
-		req.Header.Set("Authorization", "Bearer "+apiKey)
+	if k := opts.key(); k != "" {
+		req.Header.Set("Authorization", "Bearer "+k)
 	}
 
 	resp, err := client.Do(req)
@@ -181,18 +205,25 @@ func SendFeedback(ctx context.Context, args map[string]any, serverName string) s
 // ── Handler & Registration ──────────────────────────────────────────────────
 
 // NewFeedbackHandler returns a tool handler function bound to a server name.
-func NewFeedbackHandler(serverName string) server.ToolHandlerFunc {
+// Pass nil for opts to use environment variable defaults.
+func NewFeedbackHandler(serverName string, opts *Options) server.ToolHandlerFunc {
 	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		args := req.GetArguments()
-		msg := SendFeedback(ctx, args, serverName)
+		msg := SendFeedback(ctx, args, serverName, opts)
 		return mcp.NewToolResultText(msg), nil
 	}
 }
 
 // RegisterFeedbackTool is a one-liner to add the feedback tool to an MCP server.
+// Pass nil for opts to use environment variable defaults.
 //
 //	s := server.NewMCPServer("my-server", "1.0.0")
-//	feedback.RegisterFeedbackTool(s, "my-server")
-func RegisterFeedbackTool(s *server.MCPServer, serverName string) {
-	s.AddTool(NewFeedbackTool(), NewFeedbackHandler(serverName))
+//	feedback.RegisterFeedbackTool(s, "my-server", nil)
+//
+//	// Or point at a specific sidecar:
+//	feedback.RegisterFeedbackTool(s, "my-server", &feedback.Options{
+//	    SidecarURL: "https://feedback.prod.example.com",
+//	})
+func RegisterFeedbackTool(s *server.MCPServer, serverName string, opts *Options) {
+	s.AddTool(NewFeedbackTool(), NewFeedbackHandler(serverName, opts))
 }

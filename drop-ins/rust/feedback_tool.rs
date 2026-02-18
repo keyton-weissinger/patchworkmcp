@@ -69,11 +69,29 @@ struct SidecarResponse {
 
 // ── Config ──────────────────────────────────────────────────────────────────
 
-fn sidecar_url() -> String {
+/// Override environment variable defaults for sidecar connection.
+pub struct Options {
+    /// Override FEEDBACK_SIDECAR_URL.
+    pub sidecar_url: Option<String>,
+    /// Override FEEDBACK_API_KEY.
+    pub api_key: Option<String>,
+}
+
+fn resolve_url(opts: Option<&Options>) -> String {
+    if let Some(o) = opts {
+        if let Some(ref url) = o.sidecar_url {
+            return url.clone();
+        }
+    }
     env::var("FEEDBACK_SIDECAR_URL").unwrap_or_else(|_| "http://localhost:8099".to_string())
 }
 
-fn api_key() -> Option<String> {
+fn resolve_key(opts: Option<&Options>) -> Option<String> {
+    if let Some(o) = opts {
+        if let Some(ref key) = o.api_key {
+            return if key.is_empty() { None } else { Some(key.clone()) };
+        }
+    }
     env::var("FEEDBACK_API_KEY").ok().filter(|k| !k.is_empty())
 }
 
@@ -81,8 +99,9 @@ fn api_key() -> Option<String> {
 
 /// Send feedback to the PatchworkMCP sidecar. Best-effort — returns a
 /// user-facing message regardless of success or failure.
-pub async fn send_feedback(payload: &FeedbackPayload) -> String {
-    let url = format!("{}/api/feedback", sidecar_url());
+/// Pass `None` for opts to use environment variable defaults.
+pub async fn send_feedback(payload: &FeedbackPayload, opts: Option<&Options>) -> String {
+    let url = format!("{}/api/feedback", resolve_url(opts));
 
     let client = match reqwest::Client::builder()
         .timeout(Duration::from_secs(5))
@@ -95,7 +114,7 @@ pub async fn send_feedback(payload: &FeedbackPayload) -> String {
     };
 
     let mut req = client.post(&url).json(payload);
-    if let Some(key) = api_key() {
+    if let Some(key) = resolve_key(opts) {
         req = req.header("Authorization", format!("Bearer {key}"));
     }
 

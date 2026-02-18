@@ -130,12 +130,21 @@ FASTMCP_TOOL_KWARGS = {
 }
 
 
-def register_feedback_tool(server, server_name: str = "unknown"):
+def register_feedback_tool(
+    server,
+    server_name: str = "unknown",
+    *,
+    sidecar_url: str | None = None,
+    api_key: str | None = None,
+):
     """One-liner registration for FastMCP servers.
 
     Usage:
         from feedback_tool import register_feedback_tool
         register_feedback_tool(server, "my-server")
+
+        # Point at a specific sidecar:
+        register_feedback_tool(server, "my-server", sidecar_url="https://feedback.prod.example.com")
     """
 
     @server.tool(**FASTMCP_TOOL_KWARGS)
@@ -163,6 +172,8 @@ def register_feedback_tool(server, server_name: str = "unknown"):
                 "session_id": session_id,
             },
             server_name=server_name,
+            sidecar_url=sidecar_url,
+            api_key=api_key,
         )
 
 
@@ -214,10 +225,15 @@ def _build_payload(arguments: dict, server_name: str) -> dict:
     }
 
 
-def _build_headers() -> dict:
+def _resolve_url(sidecar_url: str | None) -> str:
+    return sidecar_url or SIDECAR_URL
+
+
+def _build_headers(api_key: str | None = None) -> dict:
+    key = api_key if api_key is not None else API_KEY
     headers = {"Content-Type": "application/json"}
-    if API_KEY:
-        headers["Authorization"] = f"Bearer {API_KEY}"
+    if key:
+        headers["Authorization"] = f"Bearer {key}"
     return headers
 
 
@@ -231,17 +247,29 @@ _UNAVAILABLE_MSG = (
 )
 
 
-async def send_feedback(arguments: dict, server_name: str = "unknown") -> str:
-    """Async — send feedback to the sidecar. For FastMCP and async contexts."""
+async def send_feedback(
+    arguments: dict,
+    server_name: str = "unknown",
+    *,
+    sidecar_url: str | None = None,
+    api_key: str | None = None,
+) -> str:
+    """Async — send feedback to the sidecar. For FastMCP and async contexts.
+
+    Args:
+        sidecar_url: Override FEEDBACK_SIDECAR_URL for this call.
+        api_key: Override FEEDBACK_API_KEY for this call.
+    """
     import httpx
 
+    url = _resolve_url(sidecar_url)
     payload = _build_payload(arguments, server_name)
-    headers = _build_headers()
+    headers = _build_headers(api_key)
 
     try:
         async with httpx.AsyncClient(timeout=5.0) as client:
             resp = await client.post(
-                f"{SIDECAR_URL}/api/feedback",
+                f"{url}/api/feedback",
                 json=payload,
                 headers=headers,
             )
@@ -258,17 +286,29 @@ async def send_feedback(arguments: dict, server_name: str = "unknown") -> str:
         return _UNAVAILABLE_MSG
 
 
-def send_feedback_sync(arguments: dict, server_name: str = "unknown") -> str:
-    """Sync — send feedback to the sidecar. For Django and sync contexts."""
+def send_feedback_sync(
+    arguments: dict,
+    server_name: str = "unknown",
+    *,
+    sidecar_url: str | None = None,
+    api_key: str | None = None,
+) -> str:
+    """Sync — send feedback to the sidecar. For Django and sync contexts.
+
+    Args:
+        sidecar_url: Override FEEDBACK_SIDECAR_URL for this call.
+        api_key: Override FEEDBACK_API_KEY for this call.
+    """
     import httpx
 
+    url = _resolve_url(sidecar_url)
     payload = _build_payload(arguments, server_name)
-    headers = _build_headers()
+    headers = _build_headers(api_key)
 
     try:
         with httpx.Client(timeout=5.0) as client:
             resp = client.post(
-                f"{SIDECAR_URL}/api/feedback",
+                f"{url}/api/feedback",
                 json=payload,
                 headers=headers,
             )
