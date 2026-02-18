@@ -12,7 +12,7 @@ No guessing. No feature request backlogs. Just structured signal from the agents
 
 ## What Happens When You Wire This Up
 
-We added PatchworkMCP to an AI cost tracking MCP server. Within one session, Claude reported:
+We added PatchworkMCP to an [AI Cost Management](https://aicostmanager.com) MCP server. Within one session, Claude reported:
 
 > **Gap:** `missing_tool` \
 > **What it needed:** A tool to search cost events by context field values (e.g., run_id, session_id) \
