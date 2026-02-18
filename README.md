@@ -1,74 +1,67 @@
 # PatchworkMCP
 
-**Capture what AI agents need but can't do — then use it to improve your MCP
-server.**
+**Your MCP servers have blind spots. Your agents already know what they are.**
 
-PatchworkMCP adds a feedback loop to any MCP server. You drop in a single tool
-file, agents call it when they hit a wall, and you get a dashboard showing
-exactly what's missing. No guessing about what to build next.
+PatchworkMCP adds a feedback tool to any MCP server. When an agent hits a gap — missing tool, wrong format, incomplete data — it tells you exactly what it needed and how to fix it. Then it drafts the PR.
 
-**The vision:** Feedback accumulates from every agent session. PatchworkMCP
-analyzes the patterns, looks at your server's repo, and gives you actionable
-suggestions — eventually as auto-drafted PRs. Right now we're at step one:
-capture and review. The analysis layer comes next.
+No guessing. No feature request backlogs. Just structured signal from the agents that actually use your tools.
+
+![PatchworkMCP — Add a note, draft a PR, ship the fix](docs/demo-draft-pr.gif)
+
+---
+
+## What Happens When You Wire This Up
+
+We added PatchworkMCP to an AI cost tracking MCP server. Within one session, Claude reported:
+
+> **Gap:** `missing_tool` \
+> **What it needed:** A tool to search cost events by context field values (e.g., run_id, session_id) \
+> **What it tried:** `get_costs`, `get_usage_events` — neither supported context-based filtering \
+> **Suggestion:** "A `search_costs_by_context` tool that accepts context key-value pairs with AND logic, combined with standard date/service/customer filters. Returns paginated event records with full context."
+
+That's not a vague complaint. That's a tool spec. PatchworkMCP can take that feedback, read your repo, and open a draft PR with the implementation.
 
 ## How It Works
 
 ```
-┌─────────────────┐     POST /api/feedback     ┌──────────────────┐
-│  Your MCP Server │ ─────────────────────────▶ │  Sidecar (8099)  │
-│                  │                            │  FastAPI + SQLite │
-│  + feedback tool │                            │  + Review UI      │
-└─────────────────┘                            └──────────────────┘
-      │                                               │
-  (agent calls                                  (you browse to
-   feedback tool                                 localhost:8099
-   when stuck)                                   to review)
+Agent hits a wall          Feedback captured           You review + ship
+
+  ┌──────────────┐    POST    ┌──────────────┐        ┌──────────────┐
+  │  MCP Server   │ ────────▶ │  Sidecar      │ ─────▶ │  Dashboard   │
+  │  + feedback   │           │  SQLite       │        │  Draft PR    │
+  │    tool       │           │  FastAPI      │        │  one click   │
+  └──────────────┘            └──────────────┘        └──────────────┘
 ```
 
-1. You copy a **single file** (the "drop-in") into your MCP server project
-2. The drop-in exposes a `feedback` tool that agents can call
-3. When an agent hits a gap — missing tool, wrong format, incomplete results —
-   it calls the feedback tool with details about what it needed
-4. The feedback goes to a **sidecar service** (a small FastAPI app) that stores
-   it in SQLite and serves a review UI
-5. You browse the dashboard, triage feedback, add notes, and spot patterns
+1. Copy a **single file** into your MCP server (Python, TypeScript, Go, or Rust)
+2. Agents call the feedback tool when they can't do what the user asked
+3. Browse `localhost:8099` to review feedback, add notes, spot patterns
+4. Click **Draft PR** — PatchworkMCP reads your repo, sends the feedback + code context to an LLM, and opens a draft pull request with the suggested fix
 
-The drop-in is available for **Python, TypeScript, Go, and Rust**. The sidecar
-is the stable contract — every drop-in just POSTs JSON to the same endpoint.
+![PatchworkMCP Dashboard](docs/screenshot-dashboard.png)
 
 ## Quick Start
 
-### 1. Start the sidecar
+**30 seconds to running:**
 
 ```bash
-# Using uv (recommended)
+git clone https://github.com/keytonweissinger/patchworkmcp.git
 cd patchworkmcp
 uv run server.py
-
-# Using pip
-pip install fastapi 'uvicorn[standard]'
-uvicorn server:app --port 8099
 ```
 
-Browse to http://localhost:8099 to see the review UI.
+Open http://localhost:8099. That's the sidecar — it stores feedback and serves the dashboard.
 
-### 2. Add the feedback tool to your MCP server
+**Now wire up your MCP server.** Pick your language, copy one file:
 
-Pick your stack below, copy the drop-in file, and wire it up. Each drop-in is
-a single file with no framework dependencies beyond what you already have.
-
----
-
-#### Python — FastMCP
+<details>
+<summary><strong>Python (FastMCP) — 2 lines</strong></summary>
 
 Copy `drop-ins/python/feedback_tool.py` into your project.
 
 ```bash
-uv add httpx    # or: pip install httpx
+uv add httpx  # or: pip install httpx
 ```
-
-**Option A: One-liner registration**
 
 ```python
 from mcp.server.fastmcp import FastMCP
@@ -78,75 +71,30 @@ server = FastMCP("my-server")
 register_feedback_tool(server, "my-server")
 ```
 
-**Option B: Manual wiring** (if you want to customize the handler)
+</details>
 
-```python
-from feedback_tool import FASTMCP_TOOL_KWARGS, send_feedback
-
-@server.tool(**FASTMCP_TOOL_KWARGS)
-async def feedback(
-    what_i_needed: str,
-    what_i_tried: str,
-    gap_type: str = "other",
-    suggestion: str = "",
-    user_goal: str = "",
-    resolution: str = "",
-    tools_available: list[str] | None = None,
-    agent_model: str = "",
-    session_id: str = "",
-) -> str:
-    return await send_feedback(
-        {
-            "what_i_needed": what_i_needed,
-            "what_i_tried": what_i_tried,
-            "gap_type": gap_type,
-            "suggestion": suggestion,
-            "user_goal": user_goal,
-            "resolution": resolution,
-            "tools_available": tools_available or [],
-            "agent_model": agent_model,
-            "session_id": session_id,
-        },
-        server_name="my-server",
-    )
-```
-
----
-
-#### Python — Django MCP (e.g. aicostmanager-style)
+<details>
+<summary><strong>Python (Django MCP)</strong></summary>
 
 Copy `drop-ins/python/feedback_tool.py` into your tools directory.
 
 ```bash
-uv add httpx    # or: pip install httpx
+uv add httpx
 ```
 
-If your server uses a `@mcp_tool` decorator with `(credential, arguments)`
-handler signatures (like aicostmanager), wire it up like this:
-
 ```python
-# my_mcp_app/tools/feedback.py
 from mcp.tools.registry import mcp_tool
 from feedback_tool import TOOL_NAME, TOOL_DESCRIPTION, TOOL_INPUT_SCHEMA, send_feedback_sync
 
-@mcp_tool(
-    name=TOOL_NAME,
-    description=TOOL_DESCRIPTION,
-    input_schema=TOOL_INPUT_SCHEMA,
-)
+@mcp_tool(name=TOOL_NAME, description=TOOL_DESCRIPTION, input_schema=TOOL_INPUT_SCHEMA)
 def feedback(credential, arguments):
     return send_feedback_sync(arguments, server_name="my-server")
 ```
 
-Then add `"feedback"` to your tool modules list so the registry picks it up.
+</details>
 
-> **Note:** Django MCP servers typically run synchronously. The drop-in
-> provides `send_feedback_sync()` for this — it uses `httpx.Client` instead
-> of `httpx.AsyncClient`.
-
----
-
-#### Python — Raw `mcp` SDK
+<details>
+<summary><strong>Python (Raw MCP SDK)</strong></summary>
 
 Copy `drop-ins/python/feedback_tool.py` into your project.
 
@@ -161,14 +109,12 @@ if name == "feedback":
     result = await send_feedback(arguments, server_name="my-server")
 ```
 
----
+</details>
 
-#### TypeScript — `@modelcontextprotocol/sdk`
+<details>
+<summary><strong>TypeScript</strong></summary>
 
-Copy `drop-ins/typescript/feedback-tool.ts` into your project. No extra
-dependencies — uses the built-in `fetch` API (Node 18+).
-
-**Option A: One-liner**
+Copy `drop-ins/typescript/feedback-tool.ts` into your project. No extra dependencies — uses built-in `fetch` (Node 18+).
 
 ```typescript
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
@@ -178,23 +124,12 @@ const server = new McpServer({ name: "my-server", version: "1.0.0" });
 registerFeedbackTool(server, "my-server");
 ```
 
-**Option B: Manual**
+</details>
 
-```typescript
-import { TOOL_NAME, TOOL_DESCRIPTION, TOOL_INPUT_SCHEMA, sendFeedback } from "./feedback-tool.js";
+<details>
+<summary><strong>Go</strong></summary>
 
-server.tool(TOOL_NAME, TOOL_DESCRIPTION, TOOL_INPUT_SCHEMA, async (args) => {
-  const message = await sendFeedback(args, "my-server");
-  return { content: [{ type: "text", text: message }] };
-});
-```
-
----
-
-#### Go — `mcp-go`
-
-Copy `drop-ins/go/feedback_tool.go` into your project. Only depends on
-`github.com/mark3labs/mcp-go` and the standard library.
+Copy `drop-ins/go/feedback_tool.go` into your project. Only depends on `github.com/mark3labs/mcp-go` and stdlib.
 
 ```go
 import "your-project/feedback"
@@ -203,141 +138,147 @@ s := server.NewMCPServer("my-server", "1.0.0")
 feedback.RegisterFeedbackTool(s, "my-server")
 ```
 
----
+</details>
 
-#### Rust
+<details>
+<summary><strong>Rust</strong></summary>
 
 Copy `drop-ins/rust/feedback_tool.rs` into your project.
 
 ```toml
-# Cargo.toml
 [dependencies]
 reqwest = { version = "0.12", features = ["json"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 ```
 
-The Rust MCP ecosystem is still solidifying. The drop-in provides the payload
-types, HTTP submission, and JSON schema constants. Wire `send_feedback()` and
-`tool_input_schema()` into your framework's tool registration:
-
 ```rust
 use feedback_tool::{payload_from_args, send_feedback, TOOL_NAME, TOOL_DESCRIPTION};
 
-// In your tool handler:
 let payload = payload_from_args(&args, "my-server");
 let message = send_feedback(&payload).await;
 ```
 
----
+</details>
 
-### 3. Test it
+**Test it:** Use your MCP server via Claude Desktop, Cursor, Claude Code, etc. Ask the agent to do something the server can't handle. Check http://localhost:8099 — you'll see what it reported.
 
-Use your MCP server via Claude Desktop, Cursor, Claude Code, etc. Ask the
-agent to do something the server can't quite handle. Check if the agent calls
-the feedback tool. Browse to http://localhost:8099 to see what it reported.
+## Draft PRs from Feedback
 
-## What We Capture (and Why)
+This is the payoff. Configure your GitHub PAT, repo, and LLM provider (Anthropic or OpenAI) in the dashboard settings panel, then click **Draft PR** on any feedback card.
 
-Every feedback item stores these fields. The schema is designed so a future
-analysis layer can look at your GitHub repo and make intelligent suggestions
-about what to build, fix, or change.
+PatchworkMCP will:
+1. Read your repo's file tree via GitHub API
+2. Score files by MCP relevance and select the most important ones
+3. Send the feedback + **your notes** + code context to the LLM with structured output enforcement
+4. Create a branch, commit the change, and open a draft PR
 
-| Field | Required | Why It Matters |
+You get a real-time progress modal showing each step. The PR links back to the original feedback.
+
+### Notes guide the LLM
+
+Before clicking Draft PR, add notes to the feedback card. Notes are human-written annotations — "the real issue is missing pagination", "look at how `get_costs` handles this", "this should be a new tool, not a param on the existing one." These get sent to the LLM as prioritized developer context, so the generated PR reflects what you actually want, not just what the agent reported.
+
+Notes are append-only with timestamps, so you build up context over multiple review sessions. The progress modal shows when notes are being included.
+
+### Re-drafting
+
+First PR not quite right? Click **Re-draft** to generate a new one. Refine your notes between attempts — the LLM sees the updated context each time. The old PR stays on GitHub; the dashboard link updates to point to the new one.
+
+![Settings Panel](docs/screenshot-settings.png)
+
+**Supported providers:**
+| Provider | Default Model | Structured Output |
 |---|---|---|
-| `what_i_needed` | Yes | The core signal — what capability was missing |
-| `what_i_tried` | Yes | Shows the agent's thought process and what exists but fell short |
-| `gap_type` | Yes | Categorizes gaps for pattern detection: `missing_tool`, `incomplete_results`, `missing_parameter`, `wrong_format`, `other` |
-| `suggestion` | No | The agent's proposed fix — tool signature, parameter, behavior change. Often surprisingly specific. |
-| `user_goal` | No | The real-world task that surfaced the gap. Helps prioritize by user impact. |
-| `resolution` | No | Did this gap `blocked` the user entirely, was it `worked_around`, or `partial`? Drives severity ranking. |
-| `tools_available` | No | What tools the agent could see. Critical for distinguishing "didn't find it" from "it doesn't exist." |
-| `agent_model` | No | Which model reported the gap. Helps separate model-specific confusion from real server gaps. |
-| `session_id` | No | Groups feedback from the same conversation. Reveals multi-step workflow failures. |
+| Anthropic | `claude-opus-4-6` | `output_config.format` with JSON schema |
+| OpenAI | `GPT-5.2-Codex` | `response_format` with `strict: true` |
 
-### Notes (append-only)
+Both use constrained decoding — the LLM is guaranteed to return valid JSON matching the PR schema. No parsing failures.
 
-Notes are stored in a separate table and are **append-only** — you can never
-lose a note by accident. Each note gets a timestamp. This matters because
-notes are where you annotate feedback with your own context ("this is the
-same issue as #42", "blocked by upstream API", "shipped in v2.1") and that
-annotation history is valuable for the future analysis layer.
+## What Gets Captured
+
+Every feedback item includes:
+
+| Field | Required | Purpose |
+|---|---|---|
+| `what_i_needed` | Yes | The missing capability — the core signal |
+| `what_i_tried` | Yes | What the agent attempted first. Separates "didn't find it" from "doesn't exist" |
+| `gap_type` | Yes | `missing_tool` · `incomplete_results` · `missing_parameter` · `wrong_format` · `other` |
+| `suggestion` | No | The agent's proposed fix. Often includes a full tool signature. |
+| `user_goal` | No | What the human was trying to do. Prioritize by real user impact. |
+| `resolution` | No | `blocked` · `worked_around` · `partial` |
+| `tools_available` | No | What tools the agent could see. Context for the gap. |
+| `agent_model` | No | Which model reported it. Separate model confusion from real gaps. |
+| `session_id` | No | Groups feedback from one conversation. Reveals multi-step failures. |
+
+**Notes** are append-only with timestamps — you never lose an annotation. When you draft a PR, notes are sent to the LLM as prioritized developer context.
 
 ## Configuration
 
-Both the drop-in and sidecar read from environment variables:
-
 | Variable | Default | Description |
 |---|---|---|
-| `FEEDBACK_SIDECAR_URL` | `http://localhost:8099` | Where the drop-in sends feedback |
-| `FEEDBACK_API_KEY` | (none) | Optional shared secret for auth |
-| `FEEDBACK_DB_PATH` | `./feedback.db` | SQLite path for sidecar |
-| `FEEDBACK_PORT` | `8099` | Port when running `uv run server.py` directly |
+| `FEEDBACK_SIDECAR_URL` | `http://localhost:8099` | Where drop-ins send feedback |
+| `FEEDBACK_API_KEY` | *(none)* | Optional shared secret for auth |
+| `FEEDBACK_DB_PATH` | `./feedback.db` | SQLite path for the sidecar |
+| `FEEDBACK_PORT` | `8099` | Port for `uv run server.py` |
 
-## API Reference
+Draft PR settings (GitHub PAT, API keys) are stored in a `.env` file that's gitignored — not in the database.
+
+## API
 
 | Method | Endpoint | Description |
 |---|---|---|
 | `POST` | `/api/feedback` | Submit feedback (called by drop-ins) |
-| `GET` | `/api/feedback` | List feedback (filterable by `server_name`, `gap_type`, `reviewed`, `resolution`, `session_id`) |
-| `GET` | `/api/feedback/{id}` | Single feedback item with full notes |
+| `GET` | `/api/feedback` | List feedback with filters |
+| `GET` | `/api/feedback/{id}` | Single item with notes |
 | `PATCH` | `/api/feedback/{id}` | Toggle reviewed status |
-| `POST` | `/api/feedback/{id}/notes` | Add a note (append-only) |
+| `POST` | `/api/feedback/{id}/notes` | Add a note |
+| `POST` | `/api/feedback/{id}/draft-pr` | Generate a draft PR (SSE stream) |
 | `GET` | `/api/stats` | Counts by server, gap type, resolution |
-| `GET` | `/` | Review UI |
+| `GET` | `/api/settings` | Current settings (keys masked) |
+| `PUT` | `/api/settings` | Update settings |
+
+## Architecture
+
+The entire sidecar is **one Python file** (`server.py`). No framework, no build step, no Docker required. FastAPI + SQLite + inline HTML/CSS/JS.
+
+```
+patchworkmcp/
+  server.py          # Everything: API, database, UI, GitHub client, LLM integration
+  feedback.db        # Created on first run
+  .env               # API keys (gitignored)
+  drop-ins/
+    python/          # FastMCP, Django MCP, raw SDK
+    typescript/      # @modelcontextprotocol/sdk
+    go/              # mcp-go
+    rust/            # reqwest-based
+```
 
 ## Adding a Drop-in for a New Language
 
-The sidecar API is the stable contract. Any language can participate by
-implementing a file that:
+The sidecar API is the stable contract. Any language can participate by:
 
-1. Defines the tool schema (name, description, input properties)
-2. POSTs a JSON payload to `{SIDECAR_URL}/api/feedback`
-3. Provides a framework-specific registration helper
+1. Defining the tool schema (name, description, input properties)
+2. POSTing JSON to `{SIDECAR_URL}/api/feedback`
+3. Providing a framework-specific registration helper
 
-The payload shape:
-
-```json
-{
-  "server_name": "my-server",
-  "what_i_needed": "...",
-  "what_i_tried": "...",
-  "gap_type": "missing_tool",
-  "suggestion": "...",
-  "user_goal": "...",
-  "resolution": "blocked",
-  "tools_available": ["tool_a", "tool_b"],
-  "agent_model": "claude-sonnet-4-20250514",
-  "session_id": "abc-123"
-}
-```
-
-Only `what_i_needed`, `what_i_tried`, and `gap_type` are required. Everything
-else has sensible defaults.
-
-If you build a drop-in for a new stack, open a PR. The pattern is: one file,
-zero extra dependencies beyond the MCP SDK for that language, a
-`registerFeedbackTool()` one-liner for the most popular framework.
+If you build one, open a PR. The pattern: one file, zero extra deps beyond the MCP SDK.
 
 ## Roadmap
 
-- [x] Feedback capture and review UI
+- [x] Feedback capture and review dashboard
 - [x] Drop-ins for Python, TypeScript, Go, Rust
 - [x] Append-only notes with timestamps
-- [ ] Feedback deduplication and clustering (group similar reports)
-- [ ] GitHub repo integration (connect feedback to your codebase)
-- [ ] LLM-powered analysis ("based on 23 reports, you should add a `date_range` param to `get_costs`")
-- [ ] Auto-drafted PRs from feedback patterns
+- [x] LLM-powered draft PRs from feedback (Anthropic + OpenAI)
+- [x] Structured output enforcement (constrained decoding, not prompt hacking)
+- [x] Real-time progress streaming during PR creation
+- [x] Dark / light theme
+- [ ] Feedback deduplication and clustering
 - [ ] Webhook notifications for new feedback
-- [ ] Export to CSV/JSON for external analysis
+- [ ] Multi-file PRs (currently single-file per PR)
+- [ ] Batch PR creation from related feedback
+- [ ] Export to CSV/JSON
 
-## What We're Testing
+## License
 
-1. **Do agents actually call the feedback tool?** The tool description is
-   crafted to trigger when agents hit dead ends — does it work in practice?
-
-2. **Is the feedback useful?** Are agents specific enough about what they
-   needed? Are the suggestions actionable?
-
-3. **What patterns emerge?** Missing tools, incomplete data, wrong formats —
-   what's the distribution, and does it match what developers would prioritize?
+MIT
