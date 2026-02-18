@@ -1,0 +1,13 @@
+[project]
+name = "patchworkmcp"
+version = "0.1.0"
+description = "Feedback loop for MCP servers — capture what agents need but can't do"
+requires-python = ">=3.10"
+dependencies = [
+    "fastapi>=0.100",
+    "uvicorn[standard]>=0.20",
+]
+
+[project.optional-dependencies]
+# Install this in the MCP server that uses the Python drop-in
+drop-in = ["httpx>=0.24"]
