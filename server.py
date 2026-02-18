@@ -112,6 +112,8 @@ def _migrate_db():
         cols = {row[1] for row in conn.execute("PRAGMA table_info(feedback)").fetchall()}
         if "pr_url" not in cols:
             conn.execute("ALTER TABLE feedback ADD COLUMN pr_url TEXT DEFAULT ''")
+        if "client_type" not in cols:
+            conn.execute("ALTER TABLE feedback ADD COLUMN client_type TEXT DEFAULT ''")
 
 
 # ── App ──────────────────────────────────────────────────────────────────────
@@ -158,6 +160,7 @@ class FeedbackIn(BaseModel):
     agent_model: str = ""
     tools_available: list[str] = Field(default_factory=list)
     session_id: str = ""
+    client_type: str = ""
 
 
 class ReviewUpdate(BaseModel):
@@ -174,6 +177,7 @@ def _row_to_dict(row: sqlite3.Row) -> dict:
     d = dict(row)
     d["reviewed"] = bool(d["reviewed"])
     d.setdefault("pr_url", "")
+    d.setdefault("client_type", "")
     if "tools_available" in d:
         try:
             d["tools_available"] = json.loads(d["tools_available"])
@@ -446,6 +450,7 @@ def _build_user_message(feedback: dict, tree: list[str], file_contents: dict[str
 **Suggestion:** {feedback.get('suggestion', '')}
 **User goal:** {feedback.get('user_goal', '')}
 **Resolution:** {feedback.get('resolution', '')}
+**Client type:** {feedback.get('client_type', '')}
 {notes_section}
 ## Repository file tree
 {tree_listing}
@@ -629,8 +634,8 @@ async def create_feedback(
             INSERT INTO feedback
                 (id, server_name, timestamp, what_i_needed, what_i_tried,
                  gap_type, suggestion, user_goal, resolution, agent_model,
-                 tools_available, session_id)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 tools_available, session_id, client_type)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 row_id,
@@ -645,6 +650,7 @@ async def create_feedback(
                 feedback.agent_model,
                 json.dumps(feedback.tools_available),
                 feedback.session_id,
+                feedback.client_type,
             ),
         )
 
@@ -1310,9 +1316,10 @@ function render() {
       </div>
       ${f.suggestion ? `<div class="field"><div class="field-label">Suggestion</div><div class="field-value">${esc(f.suggestion)}</div></div>` : ''}
       ${f.user_goal ? `<div class="field"><div class="field-label">User goal</div><div class="field-value">${esc(f.user_goal)}</div></div>` : ''}
-      ${f.agent_model || f.session_id ? `
+      ${f.agent_model || f.session_id || f.client_type ? `
         <div class="meta-row">
           ${f.agent_model ? `<div class="meta-item">Model: <span>${esc(f.agent_model)}</span></div>` : ''}
+          ${f.client_type ? `<div class="meta-item">Client: <span>${esc(f.client_type)}</span></div>` : ''}
           ${f.session_id ? `<div class="meta-item">Session: <span>${esc(f.session_id)}</span></div>` : ''}
         </div>
       ` : ''}

@@ -115,6 +115,13 @@ TOOL_INPUT_SCHEMA = {
                 "if available."
             ),
         },
+        "client_type": {
+            "type": "string",
+            "description": (
+                "The MCP client in use, if known "
+                "(e.g. 'claude-desktop', 'cursor', 'claude-code', 'continue')."
+            ),
+        },
     },
     "required": ["what_i_needed", "what_i_tried", "gap_type"],
 }
@@ -156,6 +163,7 @@ def register_feedback_tool(
         tools_available: list[str] | None = None,
         agent_model: str = "",
         session_id: str = "",
+        client_type: str = "",
     ) -> str:
         return await send_feedback(
             {
@@ -168,6 +176,7 @@ def register_feedback_tool(
                 "tools_available": tools_available or [],
                 "agent_model": agent_model,
                 "session_id": session_id,
+                "client_type": client_type,
             },
             server_name=server_name,
             sidecar_url=sidecar_url,
@@ -220,6 +229,7 @@ def _build_payload(arguments: dict, server_name: str) -> dict:
         "tools_available": tools,
         "agent_model": arguments.get("agent_model", ""),
         "session_id": arguments.get("session_id", ""),
+        "client_type": arguments.get("client_type", ""),
     }
 
 

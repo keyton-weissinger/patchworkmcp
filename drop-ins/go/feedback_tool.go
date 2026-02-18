@@ -82,6 +82,9 @@ func NewFeedbackTool() mcp.Tool {
 		mcp.WithString("session_id",
 			mcp.Description("An identifier for the current conversation or session."),
 		),
+		mcp.WithString("client_type",
+			mcp.Description("The MCP client in use, if known (e.g. 'claude-desktop', 'cursor', 'claude-code')."),
+		),
 		// Note: tools_available is sent as a comma-separated string in the Go
 		// drop-in since mcp-go doesn't have WithArray. The sidecar accepts both
 		// array and string formats.
@@ -103,6 +106,7 @@ type feedbackPayload struct {
 	Resolution   string   `json:"resolution"`
 	AgentModel   string   `json:"agent_model"`
 	SessionID    string   `json:"session_id"`
+	ClientType   string   `json:"client_type"`
 	ToolsAvail   []string `json:"tools_available"`
 }
 
@@ -169,6 +173,7 @@ func SendFeedback(ctx context.Context, args map[string]any, serverName string, o
 		Resolution:  getString(args, "resolution"),
 		AgentModel:  getString(args, "agent_model"),
 		SessionID:   getString(args, "session_id"),
+		ClientType:  getString(args, "client_type"),
 		ToolsAvail:  tools,
 	}
 	if payload.GapType == "" {

@@ -56,6 +56,8 @@ pub struct FeedbackPayload {
     #[serde(default)]
     pub session_id: String,
     #[serde(default)]
+    pub client_type: String,
+    #[serde(default)]
     pub tools_available: Vec<String>,
 }
 
@@ -175,6 +177,7 @@ pub fn payload_from_args(args: &serde_json::Value, server_name: &str) -> Feedbac
         resolution: s("resolution"),
         agent_model: s("agent_model"),
         session_id: s("session_id"),
+        client_type: s("client_type"),
         tools_available: tools,
     }
 }
@@ -225,6 +228,10 @@ pub fn tool_input_schema() -> serde_json::Value {
             "session_id": {
                 "type": "string",
                 "description": "Conversation or session identifier."
+            },
+            "client_type": {
+                "type": "string",
+                "description": "The MCP client in use, if known (e.g. 'claude-desktop', 'cursor', 'claude-code')."
             }
         },
         "required": ["what_i_needed", "what_i_tried", "gap_type"]

@@ -93,6 +93,12 @@ export const TOOL_INPUT_SCHEMA = {
     description:
       "An identifier for the current conversation or session, if available.",
   },
+  client_type: {
+    type: "string" as const,
+    description:
+      "The MCP client in use, if known " +
+      "(e.g. 'claude-desktop', 'cursor', 'claude-code', 'continue').",
+  },
 };
 
 // ── MCP SDK Integration ─────────────────────────────────────────────────────
@@ -151,6 +157,7 @@ export async function sendFeedback(
     tools_available: (args.tools_available as string[]) ?? [],
     agent_model: (args.agent_model as string) ?? "",
     session_id: (args.session_id as string) ?? "",
+    client_type: (args.client_type as string) ?? "",
   };
 
   const headers: Record<string, string> = {
