@@ -21,15 +21,21 @@ We added PatchworkMCP to an AI cost tracking MCP server. Within one session, Cla
 
 That's not a vague complaint. That's a tool spec. PatchworkMCP can take that feedback, read your repo, and open a draft PR with the implementation.
 
+## Where It Fits Today
+
+PatchworkMCP is built for **early-stage MCP server development** — when you're actively building tools and need fast signal about what's missing. Wire it up, let agents use your server, and see exactly where they hit walls. The draft PR feature means you can go from gap report to working code in under a minute.
+
+This is the MVP. The bigger picture is below in [Where This Is Going](#where-this-is-going).
+
 ## How It Works
 
 ```
 Agent hits a wall          Feedback captured           You review + ship
 
   ┌──────────────┐    POST    ┌──────────────┐        ┌──────────────┐
-  │  MCP Server   │ ────────▶ │  Sidecar      │ ─────▶ │  Dashboard   │
-  │  + feedback   │           │  SQLite       │        │  Draft PR    │
-  │    tool       │           │  FastAPI      │        │  one click   │
+  │  MCP Server  │ ────────▶  │  Sidecar     │ ─────▶ │  Dashboard   │
+  │  + feedback  │            │  SQLite      │        │  Draft PR    │
+  │    tool      │            │  FastAPI     │        │  one click   │
   └──────────────┘            └──────────────┘        └──────────────┘
 ```
 
@@ -264,19 +270,42 @@ The sidecar API is the stable contract. Any language can participate by:
 
 If you build one, open a PR. The pattern: one file, zero extra deps beyond the MCP SDK.
 
-## Roadmap
+## Where This Is Going
+
+What you see today is a developer tool: feedback comes in, you review it, you click a button, you get a PR. That's useful, but it's step one.
+
+The end state is a **self-monitoring system for MCP servers.** Feedback accumulates across sessions, users, and agents. PatchworkMCP learns to deduplicate reports, cluster related gaps, and grade them by frequency and severity. Instead of acting on the first report of a missing tool, it waits — sees that 15 different sessions hit the same wall, that 8 of them were fully blocked, and that the agents all suggested roughly the same fix. Then it acts.
+
+The human stays in the loop, but how much control you want is a spectrum:
+
+| Level | What happens | Who decides |
+|---|---|---|
+| **Suggestions only** | PatchworkMCP surfaces prioritized gaps with analysis | You build it yourself |
+| **Draft PRs** | Generates a PR for review (where we are today) | You review and merge |
+| **Auto-PRs** | Opens PRs automatically when confidence is high | You merge |
+| **Auto-merge** | Ships vetted changes to your server | Guardrails + your approval rules |
+
+Every level up requires more guardrails — confidence thresholds, test coverage requirements, scope limits, rollback hooks. We're building those incrementally, not shipping "auto-merge" as a flag you can flip tomorrow.
+
+### Shipped
 
 - [x] Feedback capture and review dashboard
 - [x] Drop-ins for Python, TypeScript, Go, Rust
 - [x] Append-only notes with timestamps
 - [x] LLM-powered draft PRs from feedback (Anthropic + OpenAI)
-- [x] Structured output enforcement (constrained decoding, not prompt hacking)
+- [x] Structured output enforcement (constrained decoding)
 - [x] Real-time progress streaming during PR creation
+- [x] Developer notes as LLM context for better PRs
+- [x] Re-draft workflow for iterating on PRs
 - [x] Dark / light theme
-- [ ] Feedback deduplication and clustering
+
+### Next
+
+- [ ] Feedback deduplication and clustering (group similar reports across sessions)
+- [ ] Severity scoring based on frequency, resolution type, and user impact
+- [ ] Multi-file PRs
 - [ ] Webhook notifications for new feedback
-- [ ] Multi-file PRs (currently single-file per PR)
-- [ ] Batch PR creation from related feedback
+- [ ] Confidence-gated auto-PRs with configurable thresholds
 - [ ] Export to CSV/JSON
 
 ## License
