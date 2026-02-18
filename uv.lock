@@ -187,21 +187,16 @@ version = "0.1.0"
 source = { virtual = "." }
 dependencies = [
     { name = "fastapi" },
-    { name = "uvicorn", extra = ["standard"] },
-]
-
-[package.optional-dependencies]
-drop-in = [
     { name = "httpx" },
+    { name = "uvicorn", extra = ["standard"] },
 ]
 
 [package.metadata]
 requires-dist = [
     { name = "fastapi", specifier = ">=0.100" },
-    { name = "httpx", marker = "extra == 'drop-in'", specifier = ">=0.24" },
+    { name = "httpx", specifier = ">=0.24" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.20" },
 ]
-provides-extras = ["drop-in"]
 
 [[package]]
 name = "pydantic"
