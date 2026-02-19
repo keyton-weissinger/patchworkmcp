@@ -14,14 +14,58 @@ Configuration via environment:
     FEEDBACK_API_KEY      - optional shared secret
 """
 
+from __future__ import annotations
+
+import asyncio
 import os
 import json
 import logging
+import time
 
 logger = logging.getLogger("patchworkmcp")
 
 SIDECAR_URL = os.environ.get("FEEDBACK_SIDECAR_URL", "http://localhost:8099")
 API_KEY = os.environ.get("FEEDBACK_API_KEY", "")
+
+# ── HTTP Client Config ────────────────────────────────────────────────────────
+
+_MAX_RETRIES = 2
+_INITIAL_BACKOFF = 0.5  # seconds; doubles each retry
+_USER_AGENT = "PatchworkMCP-Python/1.0"
+
+_async_client = None
+_sync_client = None
+
+
+def _get_timeout():
+    import httpx
+    return httpx.Timeout(connect=2.0, read=5.0, write=5.0, pool=5.0)
+
+
+def _get_async_client():
+    import httpx
+    global _async_client
+    if _async_client is None or _async_client.is_closed:
+        _async_client = httpx.AsyncClient(
+            timeout=_get_timeout(),
+            headers={"User-Agent": _USER_AGENT},
+        )
+    return _async_client
+
+
+def _get_sync_client():
+    import httpx
+    global _sync_client
+    if _sync_client is None or _sync_client.is_closed:
+        _sync_client = httpx.Client(
+            timeout=_get_timeout(),
+            headers={"User-Agent": _USER_AGENT},
+        )
+    return _sync_client
+
+
+def _is_retryable_status(status_code: int) -> bool:
+    return status_code in (429, 500, 502, 503, 504)
 
 
 # ── Tool Schema ──────────────────────────────────────────────────────────────
@@ -249,10 +293,24 @@ _SUCCESS_MSG = (
     "Thank you. Your feedback has been recorded and will be "
     "used to improve this server's capabilities."
 )
-_DELIVERY_MSG = "Feedback noted (delivery issue, but recorded locally)."
-_UNAVAILABLE_MSG = (
-    "Feedback noted (sidecar unavailable, but your input is appreciated)."
-)
+
+# Prefix makes these log lines greppable in any log aggregator.
+_LOG_PREFIX = "PATCHWORKMCP_UNSENT_FEEDBACK"
+
+
+def _log_unsent_payload(payload: dict, reason: str) -> None:
+    """Log the full payload at WARNING level so the hosting environment captures it.
+
+    The structured JSON is greppable via the _LOG_PREFIX and can be replayed
+    from whatever log aggregation the containing server uses (Heroku logs,
+    CloudWatch, Datadog, Docker stdout, etc.).
+    """
+    logger.warning(
+        "%s reason=%s payload=%s",
+        _LOG_PREFIX,
+        reason,
+        json.dumps(payload, separators=(",", ":")),
+    )
 
 
 async def send_feedback(
@@ -264,34 +322,51 @@ async def send_feedback(
 ) -> str:
     """Async — send feedback to the sidecar. For FastMCP and async contexts.
 
+    Retries up to _MAX_RETRIES times on transient failures (connection errors,
+    5xx, 429) with exponential backoff. Reuses a module-level httpx.AsyncClient
+    for connection pooling.
+
     Args:
         sidecar_url: Override FEEDBACK_SIDECAR_URL for this call.
         api_key: Override FEEDBACK_API_KEY for this call.
     """
-    import httpx
-
     url = _resolve_url(sidecar_url)
+    endpoint = f"{url}/api/feedback"
     payload = _build_payload(arguments, server_name)
     headers = _build_headers(api_key)
+    client = _get_async_client()
 
-    try:
-        async with httpx.AsyncClient(timeout=5.0) as client:
-            resp = await client.post(
-                f"{url}/api/feedback",
-                json=payload,
-                headers=headers,
-            )
+    last_err = None
+    for attempt in range(_MAX_RETRIES + 1):
+        try:
+            resp = await client.post(endpoint, json=payload, headers=headers)
             if resp.status_code == 201:
                 logger.info("Feedback submitted successfully")
                 return _SUCCESS_MSG
-            else:
-                logger.warning(
-                    "Sidecar returned %d: %s", resp.status_code, resp.text
+            if _is_retryable_status(resp.status_code) and attempt < _MAX_RETRIES:
+                logger.info(
+                    "Sidecar returned %d, retrying (%d/%d)",
+                    resp.status_code, attempt + 1, _MAX_RETRIES,
                 )
-                return _DELIVERY_MSG
-    except Exception as e:
-        logger.warning("Could not reach feedback sidecar: %s", e)
-        return _UNAVAILABLE_MSG
+                await asyncio.sleep(_INITIAL_BACKOFF * (2 ** attempt))
+                continue
+            _log_unsent_payload(payload, f"status_{resp.status_code}")
+            return (
+                "Feedback could not be delivered and was logged. "
+                f"(Server returned {resp.status_code})"
+            )
+        except Exception as e:
+            last_err = e
+            if attempt < _MAX_RETRIES:
+                logger.info(
+                    "Feedback delivery failed (%s), retrying (%d/%d)",
+                    e, attempt + 1, _MAX_RETRIES,
+                )
+                await asyncio.sleep(_INITIAL_BACKOFF * (2 ** attempt))
+                continue
+
+    _log_unsent_payload(payload, f"unreachable:{last_err}")
+    return "Feedback could not be delivered and was logged. (Server unreachable)"
 
 
 def send_feedback_sync(
@@ -303,31 +378,48 @@ def send_feedback_sync(
 ) -> str:
     """Sync — send feedback to the sidecar. For Django and sync contexts.
 
+    Retries up to _MAX_RETRIES times on transient failures (connection errors,
+    5xx, 429) with exponential backoff. Reuses a module-level httpx.Client
+    for connection pooling.
+
     Args:
         sidecar_url: Override FEEDBACK_SIDECAR_URL for this call.
         api_key: Override FEEDBACK_API_KEY for this call.
     """
-    import httpx
-
     url = _resolve_url(sidecar_url)
+    endpoint = f"{url}/api/feedback"
     payload = _build_payload(arguments, server_name)
     headers = _build_headers(api_key)
+    client = _get_sync_client()
 
-    try:
-        with httpx.Client(timeout=5.0) as client:
-            resp = client.post(
-                f"{url}/api/feedback",
-                json=payload,
-                headers=headers,
-            )
+    last_err = None
+    for attempt in range(_MAX_RETRIES + 1):
+        try:
+            resp = client.post(endpoint, json=payload, headers=headers)
             if resp.status_code == 201:
                 logger.info("Feedback submitted successfully")
                 return _SUCCESS_MSG
-            else:
-                logger.warning(
-                    "Sidecar returned %d: %s", resp.status_code, resp.text
+            if _is_retryable_status(resp.status_code) and attempt < _MAX_RETRIES:
+                logger.info(
+                    "Sidecar returned %d, retrying (%d/%d)",
+                    resp.status_code, attempt + 1, _MAX_RETRIES,
                 )
-                return _DELIVERY_MSG
-    except Exception as e:
-        logger.warning("Could not reach feedback sidecar: %s", e)
-        return _UNAVAILABLE_MSG
+                time.sleep(_INITIAL_BACKOFF * (2 ** attempt))
+                continue
+            _log_unsent_payload(payload, f"status_{resp.status_code}")
+            return (
+                "Feedback could not be delivered and was logged. "
+                f"(Server returned {resp.status_code})"
+            )
+        except Exception as e:
+            last_err = e
+            if attempt < _MAX_RETRIES:
+                logger.info(
+                    "Feedback delivery failed (%s), retrying (%d/%d)",
+                    e, attempt + 1, _MAX_RETRIES,
+                )
+                time.sleep(_INITIAL_BACKOFF * (2 ** attempt))
+                continue
+
+    _log_unsent_payload(payload, f"unreachable:{last_err}")
+    return "Feedback could not be delivered and was logged. (Server unreachable)"

@@ -16,6 +16,38 @@ const SIDECAR_URL =
   process.env.FEEDBACK_SIDECAR_URL ?? "http://localhost:8099";
 const API_KEY = process.env.FEEDBACK_API_KEY ?? "";
 
+// ── HTTP Client Config ─────────────────────────────────────────────────────
+
+const MAX_RETRIES = 2;
+const INITIAL_BACKOFF_MS = 500; // doubles each retry
+const REQUEST_TIMEOUT_MS = 5000;
+const USER_AGENT = "PatchworkMCP-TypeScript/1.0";
+
+function isRetryableStatus(status: number): boolean {
+  return [429, 500, 502, 503, 504].includes(status);
+}
+
+// Prefix makes these log lines greppable in any log aggregator.
+const LOG_PREFIX = "PATCHWORKMCP_UNSENT_FEEDBACK";
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * Log the full payload at warn level so the hosting environment captures it.
+ * The structured JSON is greppable via LOG_PREFIX and can be replayed from
+ * whatever log aggregation the containing server uses.
+ */
+function logUnsentPayload(
+  payload: Record<string, unknown>,
+  reason: string,
+): void {
+  console.warn(
+    `${LOG_PREFIX} reason=${reason} payload=${JSON.stringify(payload)}`,
+  );
+}
+
 // ── Tool Schema ─────────────────────────────────────────────────────────────
 
 export const TOOL_NAME = "feedback";
@@ -138,6 +170,13 @@ export function registerFeedbackTool(
 
 // ── Feedback Submission ─────────────────────────────────────────────────────
 
+/**
+ * Send feedback to the sidecar with retry logic.
+ *
+ * Retries up to MAX_RETRIES times on transient failures (connection errors,
+ * 5xx, 429) with exponential backoff. Uses built-in fetch (Node 18+) which
+ * handles connection pooling via undici automatically.
+ */
 export async function sendFeedback(
   args: Record<string, unknown>,
   serverName: string = "unknown",
@@ -162,28 +201,51 @@ export async function sendFeedback(
 
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
+    "User-Agent": USER_AGENT,
   };
   if (key) {
     headers["Authorization"] = `Bearer ${key}`;
   }
 
-  try {
-    const resp = await fetch(`${url}/api/feedback`, {
-      method: "POST",
-      headers,
-      body: JSON.stringify(payload),
-      signal: AbortSignal.timeout(5000),
-    });
-    if (resp.status === 201) {
-      return (
-        "Thank you. Your feedback has been recorded and will be " +
-        "used to improve this server's capabilities."
-      );
+  const endpoint = `${url}/api/feedback`;
+  const body = JSON.stringify(payload);
+  let lastError: unknown;
+
+  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+    try {
+      const resp = await fetch(endpoint, {
+        method: "POST",
+        headers,
+        body,
+        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+      });
+      if (resp.status === 201) {
+        return (
+          "Thank you. Your feedback has been recorded and will be " +
+          "used to improve this server's capabilities."
+        );
+      }
+      if (isRetryableStatus(resp.status) && attempt < MAX_RETRIES) {
+        console.warn(
+          `PatchworkMCP sidecar returned ${resp.status}, retrying (${attempt + 1}/${MAX_RETRIES})`,
+        );
+        await sleep(INITIAL_BACKOFF_MS * 2 ** attempt);
+        continue;
+      }
+      logUnsentPayload(payload, `status_${resp.status}`);
+      return `Feedback could not be delivered and was logged. (Server returned ${resp.status})`;
+    } catch (e) {
+      lastError = e;
+      if (attempt < MAX_RETRIES) {
+        console.warn(
+          `PatchworkMCP: delivery failed (${e}), retrying (${attempt + 1}/${MAX_RETRIES})`,
+        );
+        await sleep(INITIAL_BACKOFF_MS * 2 ** attempt);
+        continue;
+      }
     }
-    console.warn(`PatchworkMCP sidecar returned ${resp.status}`);
-    return "Feedback noted (delivery issue, but recorded locally).";
-  } catch (e) {
-    console.warn("PatchworkMCP: could not reach sidecar:", e);
-    return "Feedback noted (sidecar unavailable, but your input is appreciated).";
   }
+
+  logUnsentPayload(payload, `unreachable:${lastError}`);
+  return "Feedback could not be delivered and was logged. (Server unreachable)";
 }

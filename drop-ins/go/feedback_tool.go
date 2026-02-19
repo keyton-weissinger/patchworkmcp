@@ -17,6 +17,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
+	"math"
+	"net"
 	"net/http"
 	"os"
 	"time"
@@ -29,6 +32,42 @@ var (
 	sidecarURL = getEnv("FEEDBACK_SIDECAR_URL", "http://localhost:8099")
 	apiKey     = os.Getenv("FEEDBACK_API_KEY")
 )
+
+// ── HTTP Client Config ─────────────────────────────────────────────────────
+
+const (
+	maxRetries     = 2
+	initialBackoff = 500 * time.Millisecond // doubles each retry
+	userAgent      = "PatchworkMCP-Go/1.0"
+)
+
+// Module-level client with connection pooling and sensible timeouts.
+var httpClient = &http.Client{
+	Timeout: 5 * time.Second,
+	Transport: &http.Transport{
+		DialContext: (&net.Dialer{
+			Timeout: 2 * time.Second,
+		}).DialContext,
+		MaxIdleConns:        10,
+		MaxIdleConnsPerHost: 5,
+		IdleConnTimeout:     90 * time.Second,
+	},
+}
+
+// Prefix makes these log lines greppable in any log aggregator.
+const logPrefix = "PATCHWORKMCP_UNSENT_FEEDBACK"
+
+func isRetryableStatus(code int) bool {
+	return code == 429 || code == 500 || code == 502 || code == 503 || code == 504
+}
+
+// logUnsentPayload writes the full payload to stderr at warning level so the
+// hosting environment captures it. The structured JSON is greppable via
+// logPrefix and can be replayed from whatever log aggregation the containing
+// server uses (Heroku logs, CloudWatch, Docker stdout, etc.).
+func logUnsentPayload(body []byte, reason string) {
+	fmt.Fprintf(os.Stderr, "%s reason=%s payload=%s\n", logPrefix, reason, string(body))
+}
 
 func getEnv(key, fallback string) string {
 	if v := os.Getenv(key); v != "" {
@@ -142,8 +181,11 @@ func (o *Options) key() string {
 	return apiKey
 }
 
-// SendFeedback posts feedback to the sidecar. Best-effort, non-blocking on
-// failure. Returns a message suitable as the tool response.
+// SendFeedback posts feedback to the sidecar with retry logic.
+//
+// Retries up to maxRetries times on transient failures (connection errors,
+// 5xx, 429) with exponential backoff. Uses a module-level http.Client for
+// connection pooling. Best-effort — returns a message regardless of outcome.
 // Pass nil for opts to use environment variable defaults.
 func SendFeedback(ctx context.Context, args map[string]any, serverName string, opts *Options) string {
 	// Parse tools_available — accept comma-separated string or []any
@@ -185,26 +227,59 @@ func SendFeedback(ctx context.Context, args map[string]any, serverName string, o
 		return "Feedback noted (encoding error)."
 	}
 
-	client := &http.Client{Timeout: 5 * time.Second}
-	req, err := http.NewRequestWithContext(ctx, "POST", opts.url()+"/api/feedback", bytes.NewReader(body))
-	if err != nil {
-		return "Feedback noted (sidecar unavailable, but your input is appreciated)."
-	}
-	req.Header.Set("Content-Type", "application/json")
-	if k := opts.key(); k != "" {
-		req.Header.Set("Authorization", "Bearer "+k)
+	endpoint := opts.url() + "/api/feedback"
+	authKey := opts.key()
+	var lastErr error
+
+	for attempt := 0; attempt <= maxRetries; attempt++ {
+		req, err := http.NewRequestWithContext(ctx, "POST", endpoint, bytes.NewReader(body))
+		if err != nil {
+			return "Feedback noted (sidecar unavailable, but your input is appreciated)."
+		}
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("User-Agent", userAgent)
+		if authKey != "" {
+			req.Header.Set("Authorization", "Bearer "+authKey)
+		}
+
+		resp, err := httpClient.Do(req)
+		if err != nil {
+			lastErr = err
+			if attempt < maxRetries {
+				backoff := time.Duration(float64(initialBackoff) * math.Pow(2, float64(attempt)))
+				select {
+				case <-ctx.Done():
+					logUnsentPayload(body, fmt.Sprintf("unreachable:%v", err))
+					return "Feedback could not be delivered and was logged. (Server unreachable)"
+				case <-time.After(backoff):
+				}
+				continue
+			}
+			break
+		}
+		// Drain body so the connection can be reused.
+		io.Copy(io.Discard, resp.Body)
+		resp.Body.Close()
+
+		if resp.StatusCode == 201 {
+			return "Thank you. Your feedback has been recorded and will be used to improve this server's capabilities."
+		}
+		if isRetryableStatus(resp.StatusCode) && attempt < maxRetries {
+			backoff := time.Duration(float64(initialBackoff) * math.Pow(2, float64(attempt)))
+			select {
+			case <-ctx.Done():
+				logUnsentPayload(body, fmt.Sprintf("status_%d", resp.StatusCode))
+				return fmt.Sprintf("Feedback could not be delivered and was logged. (Server returned %d)", resp.StatusCode)
+			case <-time.After(backoff):
+			}
+			continue
+		}
+		logUnsentPayload(body, fmt.Sprintf("status_%d", resp.StatusCode))
+		return fmt.Sprintf("Feedback could not be delivered and was logged. (Server returned %d)", resp.StatusCode)
 	}
 
-	resp, err := client.Do(req)
-	if err != nil {
-		return "Feedback noted (sidecar unavailable, but your input is appreciated)."
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode == 201 {
-		return "Thank you. Your feedback has been recorded and will be used to improve this server's capabilities."
-	}
-	return fmt.Sprintf("Feedback noted (sidecar returned %d).", resp.StatusCode)
+	logUnsentPayload(body, fmt.Sprintf("unreachable:%v", lastErr))
+	return "Feedback could not be delivered and was logged. (Server unreachable)"
 }
 
 // ── Handler & Registration ──────────────────────────────────────────────────

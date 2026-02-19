@@ -19,6 +19,7 @@
 
 use serde::{Deserialize, Serialize};
 use std::env;
+use std::sync::LazyLock;
 use std::time::Duration;
 
 // ── Constants ───────────────────────────────────────────────────────────────
@@ -69,6 +70,40 @@ struct SidecarResponse {
     status: String,
 }
 
+// ── HTTP Client Config ──────────────────────────────────────────────────────
+
+const MAX_RETRIES: u32 = 2;
+const INITIAL_BACKOFF_MS: u64 = 500; // doubles each retry
+const USER_AGENT: &str = "PatchworkMCP-Rust/1.0";
+
+/// Module-level HTTP client for connection pooling and TLS session reuse.
+/// LazyLock is stable since Rust 1.80.
+static CLIENT: LazyLock<reqwest::Client> = LazyLock::new(|| {
+    reqwest::Client::builder()
+        .connect_timeout(Duration::from_secs(2))
+        .timeout(Duration::from_secs(5))
+        .user_agent(USER_AGENT)
+        .pool_max_idle_per_host(5)
+        .build()
+        .expect("Failed to build reqwest HTTP client")
+});
+
+fn is_retryable_status(code: u16) -> bool {
+    matches!(code, 429 | 500 | 502 | 503 | 504)
+}
+
+/// Prefix makes these log lines greppable in any log aggregator.
+const LOG_PREFIX: &str = "PATCHWORKMCP_UNSENT_FEEDBACK";
+
+/// Log the full payload to stderr so the hosting environment captures it.
+/// The structured JSON is greppable via LOG_PREFIX and can be replayed from
+/// whatever log aggregation the containing server uses (Heroku logs,
+/// CloudWatch, Docker stdout, etc.).
+fn log_unsent_payload(payload: &FeedbackPayload, reason: &str) {
+    let json = serde_json::to_string(payload).unwrap_or_else(|_| "{}".to_string());
+    eprintln!("{LOG_PREFIX} reason={reason} payload={json}");
+}
+
 // ── Config ──────────────────────────────────────────────────────────────────
 
 /// Override environment variable defaults for sidecar connection.
@@ -99,45 +134,75 @@ fn resolve_key(opts: Option<&Options>) -> Option<String> {
 
 // ── Submission ──────────────────────────────────────────────────────────────
 
-/// Send feedback to the PatchworkMCP sidecar. Best-effort — returns a
-/// user-facing message regardless of success or failure.
+/// Send feedback to the PatchworkMCP sidecar with retry logic.
+///
+/// Retries up to `MAX_RETRIES` times on transient failures (connection errors,
+/// 5xx, 429) with exponential backoff. Uses a module-level `reqwest::Client`
+/// for connection pooling and TLS session reuse.
+///
+/// Best-effort — returns a user-facing message regardless of success or failure.
 /// Pass `None` for opts to use environment variable defaults.
 pub async fn send_feedback(payload: &FeedbackPayload, opts: Option<&Options>) -> String {
-    let url = format!("{}/api/feedback", resolve_url(opts));
+    let endpoint = format!("{}/api/feedback", resolve_url(opts));
+    let auth_key = resolve_key(opts);
 
-    let client = match reqwest::Client::builder()
-        .timeout(Duration::from_secs(5))
-        .build()
-    {
-        Ok(c) => c,
-        Err(_) => {
-            return "Feedback noted (HTTP client error).".to_string();
+    for attempt in 0..=MAX_RETRIES {
+        let mut req = CLIENT.post(&endpoint).json(payload);
+        if let Some(ref key) = auth_key {
+            req = req.header("Authorization", format!("Bearer {key}"));
         }
-    };
 
-    let mut req = client.post(&url).json(payload);
-    if let Some(key) = resolve_key(opts) {
-        req = req.header("Authorization", format!("Bearer {key}"));
+        match req.send().await {
+            Ok(resp) => {
+                let status = resp.status().as_u16();
+                if status == 201 {
+                    return "Thank you. Your feedback has been recorded and will be \
+                            used to improve this server's capabilities."
+                        .to_string();
+                }
+                if is_retryable_status(status) && attempt < MAX_RETRIES {
+                    eprintln!(
+                        "PatchworkMCP sidecar returned {status}, retrying ({}/{})",
+                        attempt + 1,
+                        MAX_RETRIES
+                    );
+                    tokio::time::sleep(Duration::from_millis(
+                        INITIAL_BACKOFF_MS * 2u64.pow(attempt),
+                    ))
+                    .await;
+                    continue;
+                }
+                log_unsent_payload(payload, &format!("status_{status}"));
+                return format!(
+                    "Feedback could not be delivered and was logged. (Server returned {status})"
+                );
+            }
+            Err(e) => {
+                if attempt < MAX_RETRIES {
+                    eprintln!(
+                        "PatchworkMCP: delivery failed ({e}), retrying ({}/{})",
+                        attempt + 1,
+                        MAX_RETRIES
+                    );
+                    tokio::time::sleep(Duration::from_millis(
+                        INITIAL_BACKOFF_MS * 2u64.pow(attempt),
+                    ))
+                    .await;
+                    continue;
+                }
+                eprintln!(
+                    "PatchworkMCP: could not reach sidecar after {} attempts: {e}",
+                    MAX_RETRIES + 1
+                );
+                log_unsent_payload(payload, &format!("unreachable:{e}"));
+                return "Feedback could not be delivered and was logged. (Server unreachable)"
+                    .to_string();
+            }
+        }
     }
 
-    match req.send().await {
-        Ok(resp) if resp.status().as_u16() == 201 => {
-            "Thank you. Your feedback has been recorded and will be \
-             used to improve this server's capabilities."
-                .to_string()
-        }
-        Ok(resp) => {
-            eprintln!(
-                "PatchworkMCP sidecar returned {}",
-                resp.status().as_u16()
-            );
-            "Feedback noted (delivery issue, but recorded locally).".to_string()
-        }
-        Err(e) => {
-            eprintln!("PatchworkMCP: could not reach sidecar: {e}");
-            "Feedback noted (sidecar unavailable, but your input is appreciated).".to_string()
-        }
-    }
+    log_unsent_payload(payload, "unreachable:retries_exhausted");
+    "Feedback could not be delivered and was logged. (Server unreachable)".to_string()
 }
 
 /// Build a FeedbackPayload from a JSON value (as received from MCP call_tool).
