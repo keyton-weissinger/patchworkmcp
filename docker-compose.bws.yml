@@ -1,0 +1,17 @@
+name: patchworkmcp
+
+services:
+  web:
+    build: .
+    container_name: patchworkmcp_web
+    environment:
+      FEEDBACK_DB_PATH: /data/feedback.db
+    volumes:
+      - /srv/bws/patchworkmcp:/data
+    networks:
+      - bws_network
+    restart: unless-stopped
+
+networks:
+  bws_network:
+    external: true
